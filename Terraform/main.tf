@@ -1,147 +1,151 @@
 provider "aws" {
-  access_key = var.aws_access_key
-  secret_key = var.aws_secret_key
-  region     = var.aws_region
+  region = "us-east-2" # Change to your preferred region
 }
 
-resource "aws_vpc" "app_vpc" {
-  cidr_block = var.vpc_cidr
-
+resource "aws_vpc" "portfolio_vpc" {
+  cidr_block = "10.0.0.0/16"
+  
   tags = {
-    Name = "app_vpc"
+    Name = "portfolio_vpc"
+  }
+  
+}
+
+
+
+resource "aws_subnet" "public_subnet" {
+  vpc_id            = aws_vpc.portfolio_vpc.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "us-east-2a" 
+  
+  tags = {
+    Name = "public subnet"
   }
 }
 
 resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.app_vpc.id
+  vpc_id = aws_vpc.portfolio_vpc.id
 
   tags = {
     Name = "IGW"
   }
 }
 
-resource "aws_subnet" "public_sub" {
-  vpc_id                  = aws_vpc.app_vpc.id
-  cidr_block              = var.public_subnet_cidr
-  availability_zone       = var.availability_zone
-  map_public_ip_on_launch = true
+resource "aws_route_table" "public_route_table" {
+  vpc_id = aws_vpc.portfolio_vpc.id
 
   tags = {
-    Name = "public subnet"
+    Name = "public rt"
+  }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
   }
 }
 
-resource "aws_route" "route_to_igw_default" {
-  route_table_id         = aws_vpc.app_vpc.default_route_table_id
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.igw.id
+resource "aws_route_table_association" "public_subnet_assoc" {
+  subnet_id      = aws_subnet.public_subnet.id
+  route_table_id = aws_route_table.public_route_table.id
 }
 
-resource "aws_security_group" "test_sg" {
-  name        = "test-sg"
-  description = "Enable web traffic for the project"
-  vpc_id      = aws_vpc.app_vpc.id
 
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
-  ingress {
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-resource "aws_instance" "machine1" {
-  ami             = var.instance_ami
-  instance_type   = var.instance_type
-  key_name        = var.key_name
-  subnet_id       = aws_subnet.public_sub.id
-  security_groups = [aws_security_group.test_sg.id]
+resource "aws_instance" "portfolio_instance" {
+  ami           = "ami-085f9c64a9b75eed5"
+  instance_type = "t2.micro"
+  subnet_id     = aws_subnet.public_subnet.id
+  key_name      = "project" 
 
   tags = {
-    Name = "test1"
+    Name = "task2-instance"
   }
 }
 
-resource "aws_s3_bucket" "my_bucket" {
-  bucket = var.bucket_name
+
+resource "aws_s3_bucket" "demo-bucket" {
+  bucket = var.my_bucket_name # Name of the S3 bucket
 }
 
-resource "aws_s3_bucket_ownership_controls" "my_bucket_owner" {
-  bucket = aws_s3_bucket.my_bucket.id
 
+resource "aws_s3_bucket_ownership_controls" "example" {
+  bucket = aws_s3_bucket.demo-bucket.id
   rule {
     object_ownership = "BucketOwnerPreferred"
   }
 }
 
-resource "aws_s3_bucket_public_access_block" "my_bucket_access" {
-  bucket = aws_s3_bucket.my_bucket.id
+
+resource "aws_s3_bucket_public_access_block" "example" {
+  bucket = aws_s3_bucket.demo-bucket.id
 
   block_public_acls       = false
   block_public_policy     = false
   ignore_public_acls      = false
-  restrict_public_buckets = false
+  restrict_public_buckets = false 
 }
 
-resource "aws_s3_bucket_acl" "my_bucket_owner" {
-  bucket = aws_s3_bucket.my_bucket.id
+
+# AWS S3 bucket ACL resource
+resource "aws_s3_bucket_acl" "example" {
+  depends_on = [
+    aws_s3_bucket_ownership_controls.example,
+    aws_s3_bucket_public_access_block.example,
+  ]
+
+  bucket = aws_s3_bucket.demo-bucket.id
   acl    = "public-read"
 }
 
-resource "aws_s3_bucket_policy" "my_bucket_policy" {
-  bucket = aws_s3_bucket.my_bucket.id
 
+
+resource "aws_s3_bucket_policy" "host_bucket_policy" {
+  bucket =  aws_s3_bucket.demo-bucket.id # ID of the S3 bucket
+
+  # Policy JSON for allowing public read access
   policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
+    "Version" : "2012-10-17",
+    "Statement" : [
       {
-        Effect    = "Allow",
-        Principal = "*",
-        Action    = "s3:GetObject",
-        Resource  = "${aws_s3_bucket.my_bucket.arn}/*"
+        "Effect" : "Allow",
+        "Principal" : "*",
+        "Action" : "s3:GetObject",
+        "Resource": "arn:aws:s3:::${var.my_bucket_name}/*"
       }
     ]
   })
 }
 
-resource "aws_s3_object" "index" {
-  bucket       = aws_s3_bucket.my_bucket.id
-  key          = "index.html"
-  source       = "index.html"
-  acl          = "public-read"
-  content_type = "text/html"
+module "template_files" {
+    source = "hashicorp/dir/template"
+
+    base_dir = "${path.module}/web-files"
 }
 
-resource "aws_s3_object" "error" {
-  bucket       = aws_s3_bucket.my_bucket.id
-  key          = "error.html"
-  source       = "error.html"
-  acl          = "public-read"
-  content_type = "text/html"
-}
+# https://registry.terraform.io/modules/hashicorp/dir/template/latest
 
-resource "aws_s3_bucket_website_configuration" "website" {
-  bucket = aws_s3_bucket.my_bucket.id
 
+resource "aws_s3_bucket_website_configuration" "web-config" {
+  bucket =    aws_s3_bucket.demo-bucket.id  # ID of the S3 bucket
+
+  # Configuration for the index document
   index_document {
     suffix = "index.html"
   }
+}
 
-  error_document {
-    key = "error.html"
-  }
+
+# AWS S3 object resource for hosting bucket files
+resource "aws_s3_object" "Bucket_files" {
+  bucket =  aws_s3_bucket.demo-bucket.id  # ID of the S3 bucket
+
+  for_each     = module.template_files.files
+  key          = each.key
+  content_type = each.value.content_type
+
+  source  = each.value.source_path
+  content = each.value.content
+
+  # ETag of the S3 object
+  etag = each.value.digests.md5
 }
